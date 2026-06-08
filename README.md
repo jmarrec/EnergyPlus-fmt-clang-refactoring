@@ -1,6 +1,29 @@
+# EnergyPlus-fmt-clang-refactoring
+
+Small Clang LibTooling-based refactoring tools that rewrites EnergyPlus C++ Source code.
+
+## path_format_fixer
+
+It finds calls to EnergyPlus::format/fmt::format/std::format that pass a std::filesystem::path::string()/generic_string() argument, drops the redundant .string()/.generic_string() call (inserting a `{:g}` format spec when needed for generic_string), and normalizes the call itself onto std::format
+
+There is a gtest suite covering the AST-matching and rewrite logic.
+
+## Building
+
+
+### Without tests
+
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++-20 -DCMAKE_C_COMPILER=clang-20 -DBUILD_TESTING:BOOL=OFF
+
+### With tests
+
 Using **conan >= 2.0**:
 
-Install conan dependencies and create toolchain file.
+```
+pip install conan
+```
+
+Install conan dependencies and create toolchain file. Needed only to have `gtest` and `fmt` for the tests.
 
 ```
 cat ~/.conan2/profiles/clang
@@ -19,12 +42,15 @@ os=Linux
 ```shell
 export CC=/usr/bin/clang-20
 export CXX=/usr/bin/clang++-20
-conan install . --output-folder=./build --build=missing -c tools.cmake.cmaketoolchain:generator=Ninja -s compiler.cppstd=20 -s build_type=Release --profile:all clang -c tools.build:cxxflags="['-Wno-deprecated-literal-operator', '-DFMT_CONSTEVAL=']"
+conan install . --output-folder=./build --build=missing -c tools.cmake.cmaketoolchain:generator=Ninja \
+  -s compiler.cppstd=20 -s build_type=Release
+  --profile:all clang \
+  -c tools.build:cxxflags="['-Wno-deprecated-literal-operator', '-DFMT_CONSTEVAL=']"
 ```
 
 Build using conan-presets
 
 ```shell
-cmake --preset conan-release
+cmake --preset conan-release -DBUILD_TESTING:BOOL=ON
 cmake --build --preset conan-release
 ```
