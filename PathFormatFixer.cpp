@@ -61,15 +61,20 @@ std::optional<std::vector<Field>> scanReplacementFields(StringRef Text) {
 }
 
 StatementMatcher makeMatcher(const std::vector<std::string> &FormatFunctionNames) {
-  auto PathToStringCall =
-      cxxMemberCallExpr(callee(cxxMethodDecl(hasAnyName("string", "generic_string"))),
-                        on(hasType(cxxRecordDecl(hasName("::std::filesystem::path")))))
-          .bind("pathCall");
-
   std::vector<StringRef> Names(FormatFunctionNames.begin(), FormatFunctionNames.end());
-  return callExpr(callee(functionDecl(hasAnyName(Names))),
-                  hasAnyArgument(expr(anyOf(PathToStringCall, hasDescendant(PathToStringCall)))))
-      .bind("formatCall");
+
+  // Match each path-to-string call independently (rather than matching the
+  // format call and looking for *an* argument among its arguments): with
+  // hasAnyArgument()/anyOf(), MatchFinder only ever produces one match per
+  // format call, so a call passing multiple paths would only get its first
+  // path argument rewritten. Anchoring the matcher on the path call itself,
+  // with the format call found via hasAncestor(), gives one match per path
+  // call instead.
+  return cxxMemberCallExpr(
+             callee(cxxMethodDecl(hasAnyName("string", "generic_string"))),
+             on(hasType(cxxRecordDecl(hasName("::std::filesystem::path")))),
+             hasAncestor(callExpr(callee(functionDecl(hasAnyName(Names)))).bind("formatCall")))
+      .bind("pathCall");
 }
 
 void PathFormatCallback::run(const MatchFinder::MatchResult &Result) {
