@@ -59,11 +59,4 @@ private:
   llvm::SmallPtrSet<const clang::CallExpr *, 8> RenamedCalls;
 };
 
-// Runs the path-format-fixer transformation on in-memory `Code` and returns
-// the rewritten source text (or `Code` unchanged if nothing matched / the
-// tool failed to run). Intended for tests.
-std::string runOnCode(llvm::StringRef Code,
-                      const std::vector<std::string> &FormatFunctionNames = {
-                          "EnergyPlus::format", "std::format", "fmt::format"});
-
 } // namespace path_format_fixer

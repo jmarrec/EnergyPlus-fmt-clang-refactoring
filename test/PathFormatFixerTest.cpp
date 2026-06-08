@@ -1,9 +1,9 @@
 #include "../PathFormatFixer.hpp"
+#include "Fixture.hpp"
 
 #include <gtest/gtest.h>
 
 using path_format_fixer::Field;
-using path_format_fixer::runOnCode;
 using path_format_fixer::scanReplacementFields;
 
 namespace {
