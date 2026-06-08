@@ -3,6 +3,7 @@
 #include "clang/ASTMatchers/ASTMatchFinder.h"
 #include "clang/ASTMatchers/ASTMatchers.h"
 #include "clang/Tooling/Core/Replacement.h"
+#include "llvm/ADT/SmallPtrSet.h"
 
 #include <map>
 #include <optional>
@@ -32,10 +33,12 @@ struct Field {
 // them uniformly here is fine.
 std::optional<std::vector<Field>> scanReplacementFields(llvm::StringRef Text);
 
-// Builds the AST matcher that finds calls to `FormatFunctionName` (e.g.
-// `EnergyPlus::format`) passing a `std::filesystem::path::string()` /
-// `generic_string()` call as one of the variadic arguments.
-clang::ast_matchers::StatementMatcher makeMatcher(llvm::StringRef FormatFunctionName);
+// Builds the AST matcher that finds calls to any of `FormatFunctionNames`
+// (e.g. `EnergyPlus::format`, `std::format`, `fmt::format`) passing a
+// `std::filesystem::path::string()` / `generic_string()` call as one of the
+// variadic arguments.
+clang::ast_matchers::StatementMatcher
+makeMatcher(const std::vector<std::string> &FormatFunctionNames);
 
 class PathFormatCallback : public clang::ast_matchers::MatchFinder::MatchCallback {
 public:
@@ -50,12 +53,17 @@ private:
                       llvm::StringRef NewText);
 
   std::map<std::string, clang::tooling::Replacements> &FileToReplaces;
+  // Calls already rewritten onto `std::format`, so multiple matches against
+  // the same call (one per rewritten path argument) don't add the same
+  // callee replacement twice.
+  llvm::SmallPtrSet<const clang::CallExpr *, 8> RenamedCalls;
 };
 
 // Runs the path-format-fixer transformation on in-memory `Code` and returns
 // the rewritten source text (or `Code` unchanged if nothing matched / the
 // tool failed to run). Intended for tests.
 std::string runOnCode(llvm::StringRef Code,
-                      llvm::StringRef FormatFunctionName = "EnergyPlus::format");
+                      const std::vector<std::string> &FormatFunctionNames = {
+                          "EnergyPlus::format", "std::format", "fmt::format"});
 
 } // namespace path_format_fixer

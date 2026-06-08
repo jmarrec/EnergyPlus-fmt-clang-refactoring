@@ -23,22 +23,27 @@ std::optional<std::vector<Field>> scanReplacementFields(StringRef Text) {
       }
       size_t Start = I;
       size_t J = I + 1;
-      while (J < Text.size() && Text[J] != '}')
+      while (J < Text.size() && Text[J] != '}') {
         ++J;
-      if (J >= Text.size())
+      }
+      if (J >= Text.size()) {
         return std::nullopt;
+      }
+
       std::string Inner = Text.substr(Start + 1, J - Start - 1).str();
 
       // Leading digits, if any, are an explicit argument index.
       size_t NumEnd = 0;
-      while (NumEnd < Inner.size() && isdigit(static_cast<unsigned char>(Inner[NumEnd])))
+      while (NumEnd < Inner.size() && isdigit(static_cast<unsigned char>(Inner[NumEnd]))) {
         ++NumEnd;
+      }
 
-      int ArgIndex;
-      if (NumEnd > 0)
+      int ArgIndex = 0;
+      if (NumEnd > 0) {
         ArgIndex = std::stoi(Inner.substr(0, NumEnd));
-      else
+      } else {
         ArgIndex = static_cast<int>(AutoIndex++);
+      }
 
       Fields.push_back(Field{Start, J - Start + 1, std::move(Inner), ArgIndex});
       I = J + 1;
@@ -55,13 +60,14 @@ std::optional<std::vector<Field>> scanReplacementFields(StringRef Text) {
   return Fields;
 }
 
-StatementMatcher makeMatcher(StringRef FormatFunctionName) {
+StatementMatcher makeMatcher(const std::vector<std::string> &FormatFunctionNames) {
   auto PathToStringCall =
       cxxMemberCallExpr(callee(cxxMethodDecl(hasAnyName("string", "generic_string"))),
                         on(hasType(cxxRecordDecl(hasName("::std::filesystem::path")))))
           .bind("pathCall");
 
-  return callExpr(callee(functionDecl(hasName(std::string(FormatFunctionName)))),
+  std::vector<StringRef> Names(FormatFunctionNames.begin(), FormatFunctionNames.end());
+  return callExpr(callee(functionDecl(hasAnyName(Names))),
                   hasAnyArgument(expr(anyOf(PathToStringCall, hasDescendant(PathToStringCall)))))
       .bind("formatCall");
 }
@@ -75,8 +81,9 @@ void PathFormatCallback::run(const MatchFinder::MatchResult &Result) {
   const SourceManager &SM = *Result.SourceManager;
   const LangOptions &LangOpts = Result.Context->getLangOpts();
 
-  if (FormatCall->getNumArgs() < 2)
+  if (FormatCall->getNumArgs() < 2) {
     return;
+  }
 
   const Expr *FmtArg = FormatCall->getArg(0)->IgnoreUnlessSpelledInSource();
   const auto *FmtLiteral = dyn_cast<StringLiteral>(FmtArg);
@@ -149,6 +156,14 @@ void PathFormatCallback::run(const MatchFinder::MatchResult &Result) {
       Lexer::getSourceText(CharSourceRange::getTokenRange(Base->getSourceRange()), SM, LangOpts);
 
   addReplacement(SM, CharSourceRange::getTokenRange(PathCall->getSourceRange()), BaseText);
+
+  // Normalize the call itself onto std::format (EnergyPlus::format, fmt::format, ...).
+  const FunctionDecl *Callee = FormatCall->getDirectCallee();
+  if ((Callee != nullptr) && Callee->getQualifiedNameAsString() != "std::format" &&
+      RenamedCalls.insert(FormatCall).second) {
+    const Expr *CalleeExpr = FormatCall->getCallee()->IgnoreParenImpCasts();
+    addReplacement(SM, CharSourceRange::getTokenRange(CalleeExpr->getSourceRange()), "std::format");
+  }
 }
 
 void PathFormatCallback::diag(const SourceManager &SM, SourceLocation Loc, const std::string &Msg) {
@@ -158,26 +173,29 @@ void PathFormatCallback::diag(const SourceManager &SM, SourceLocation Loc, const
 void PathFormatCallback::addReplacement(const SourceManager &SM, CharSourceRange Range,
                                         StringRef NewText) {
   Replacement Repl(SM, Range, NewText);
-  if (llvm::Error Err = FileToReplaces[std::string(Repl.getFilePath())].add(Repl))
+  if (llvm::Error Err = FileToReplaces[std::string(Repl.getFilePath())].add(Repl)) {
     llvm::errs() << "error adding replacement: " << llvm::toString(std::move(Err)) << "\n";
+  }
 }
 
-std::string runOnCode(StringRef Code, StringRef FormatFunctionName) {
+std::string runOnCode(StringRef Code, const std::vector<std::string> &FormatFunctionNames) {
   std::map<std::string, Replacements> FileToReplaces;
   PathFormatCallback Callback(FileToReplaces);
 
   MatchFinder Finder;
-  Finder.addMatcher(makeMatcher(FormatFunctionName), &Callback);
+  Finder.addMatcher(makeMatcher(FormatFunctionNames), &Callback);
 
   std::string FileName = "input.cc";
   bool Ran = runToolOnCodeWithArgs(newFrontendActionFactory(&Finder)->create(), Code,
                                    {"-std=c++20"}, FileName);
-  if (!Ran || FileToReplaces.empty())
+  if (!Ran || FileToReplaces.empty()) {
     return Code.str();
+  }
 
   auto It = FileToReplaces.find(FileName);
-  if (It == FileToReplaces.end())
+  if (It == FileToReplaces.end()) {
     It = FileToReplaces.begin();
+  }
 
   llvm::Expected<std::string> Result = applyAllReplacements(Code, It->second);
   if (!Result) {
