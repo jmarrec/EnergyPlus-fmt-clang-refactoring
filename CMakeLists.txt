@@ -24,28 +24,14 @@ find_package(LLVM REQUIRED CONFIG)
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 message(STATUS "Using ClangConfig.cmake in: ${Clang_DIR}")
 
-set(CLANG_TOOLING_LIBS
-    clangTooling
-    clangToolingRefactoring
-    clangToolingCore
-    clangFrontend
-    clangDriver
-    clangSerialization
-    clangParse
-    clangSema
-    clangAnalysis
-    clangAST
-    clangASTMatchers
-    clangRewrite
-    clangEdit
-    clangLex
-    clangBasic
-    clangSupport
-    clangFormat
-    clangAPINotes
-    clangToolingInclusions
-    clangToolingInclusionsStdlib
-)
+# Link the combined clang-cpp shared lib rather than the individual static clangXXX
+# archives: on LLVM 23.1.0 (homebrew), libclangDriver.a is missing a definition
+# (clang::driver::tools::AMDGPU::setArchNameInTriple, referenced from ToolChain.cpp.o in
+# that same archive) that IS present in libclang-cpp.dylib -- a real gap between
+# Homebrew's static and shared library outputs for this release, not something fixable
+# from here. libclang-cpp.dylib is also what the real clang++/clang-tidy binaries link
+# against, so it's the more representative thing to build tools against anyway.
+set(CLANG_TOOLING_LIBS clang-cpp LLVM)
 
 add_library(llvm_clang_includes INTERFACE)
 if(NOT LLVM_ENABLE_RTTI)
@@ -78,6 +64,64 @@ target_link_libraries(path_format_fixer_lib
 add_executable(path_format_fixer path_format_fixer.cpp)
 target_compile_definitions(path_format_fixer PRIVATE ${LLVM_DEFINITIONS})
 target_link_libraries(path_format_fixer PRIVATE path_format_fixer_lib llvm_clang_includes)
+
+add_library(recurring_static_message_check_lib STATIC
+  RecurringStaticMessageCheck.cpp
+  RecurringStaticMessageCheck.hpp
+)
+target_compile_definitions(recurring_static_message_check_lib PRIVATE ${LLVM_DEFINITIONS})
+target_link_libraries(recurring_static_message_check_lib
+  PRIVATE
+    ${CLANG_TOOLING_LIBS}
+    llvm_clang_includes
+)
+
+add_executable(recurring_static_message_check recurring_static_message_check.cpp)
+target_compile_definitions(recurring_static_message_check PRIVATE ${LLVM_DEFINITIONS})
+target_link_libraries(recurring_static_message_check PRIVATE recurring_static_message_check_lib llvm_clang_includes)
+
+add_library(mixed_indexing_check_lib STATIC
+  MixedIndexingCheck.cpp
+  MixedIndexingCheck.hpp
+)
+target_compile_definitions(mixed_indexing_check_lib PRIVATE ${LLVM_DEFINITIONS})
+target_link_libraries(mixed_indexing_check_lib
+  PRIVATE
+    ${CLANG_TOOLING_LIBS}
+    llvm_clang_includes
+)
+
+add_executable(mixed_indexing_check mixed_indexing_check.cpp)
+target_compile_definitions(mixed_indexing_check PRIVATE ${LLVM_DEFINITIONS})
+target_link_libraries(mixed_indexing_check PRIVATE mixed_indexing_check_lib llvm_clang_includes)
+
+# See test/CMakeLists.txt's identical PATH_FORMAT_FIXER_TEST_CLANG_RESOURCE_DIR: ClangTool
+# invokes the frontend library directly (not the `clang` driver binary), so it doesn't
+# infer a resource-dir (builtin headers like stdarg.h) from this executable's own install
+# location the way the driver would -- ask the actual compiler for its resource dir.
+execute_process(
+  COMMAND "${CMAKE_CXX_COMPILER}" -print-resource-dir
+  OUTPUT_VARIABLE TOOLING_CLANG_RESOURCE_DIR
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+foreach(tgt IN ITEMS recurring_static_message_check mixed_indexing_check)
+  target_compile_definitions(${tgt} PRIVATE "CLANG_RESOURCE_DIR=\"${TOOLING_CLANG_RESOURCE_DIR}\"")
+endforeach()
+unset(TOOLING_CLANG_RESOURCE_DIR)
+
+# A clang-tidy plugin: `clang-tidy --load=<this>.dylib -checks='-*,energyplus-*' ...`.
+# See EnergyPlusTidyModule.cpp's header comment for why this deliberately does NOT link
+# the clang/clangTidy static libs (only their headers, via llvm_clang_includes) -- it's
+# dlopen()'d into a clang-tidy process that already has all of those linked in.
+# mixed_indexing_check_lib IS linked in (unlike the clang/clangTidy libs): it's our own
+# code with no ManagedStatic/cl::opt/registry globals to duplicate.
+add_library(EnergyPlusTidyModule MODULE EnergyPlusTidyModule.cpp)
+target_compile_definitions(EnergyPlusTidyModule PRIVATE ${LLVM_DEFINITIONS})
+target_link_libraries(EnergyPlusTidyModule PRIVATE mixed_indexing_check_lib llvm_clang_includes)
+set_target_properties(EnergyPlusTidyModule PROPERTIES PREFIX "")
+if(APPLE)
+  target_link_options(EnergyPlusTidyModule PRIVATE -undefined dynamic_lookup)
+endif()
 
 if(BUILD_TESTING)
   # Conan drops its generated Find/*Config.cmake modules in the build dir;
